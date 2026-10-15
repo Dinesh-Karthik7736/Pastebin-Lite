@@ -23,6 +23,9 @@ const listSchema = z.object({
   limit: z.coerce.number().int().min(1).max(50).default(10)
 });
 const expirationMs = { never: null, '1h': 3_600_000, '1d': 86_400_000, '7d': 604_800_000, '30d': 2_592_000_000 };
+const defaultCache = { get: cacheGet, set: cacheSet, deleteByPrefix: cacheDeleteByPrefix };
+
+export function createApp({ db = pool, cache = defaultCache } = {}) {
 const app = express();
 
 app.disable('x-powered-by');
@@ -33,7 +36,7 @@ app.use(compression());
 app.use(express.json({ limit: '520kb' }));
 
 app.get('/api/health', async (_req, res) => {
-  try { await pool.query('SELECT 1'); res.json({ status: 'ok' }); }
+  try { await db.query('SELECT 1'); res.json({ status: 'ok' }); }
   catch { res.status(503).json({ status: 'unavailable' }); }
 });
 
@@ -47,11 +50,11 @@ app.post('/api/pastes', async (req, res, next) => {
     for (let attempt = 0; attempt < 3; attempt += 1) {
       const id = randomBytes(7).toString('base64url');
       try {
-        await pool.query(
+        await db.query(
           'INSERT INTO pastes (id, title, content, expires_at, max_views, discoverable) VALUES ($1, $2, $3, $4, $5, $6)',
           [id, title, content, expiresAt, views, discoverable]
         );
-        await cacheDeleteByPrefix('gallery:');
+        await cache.deleteByPrefix('gallery:');
         return res.status(201).json({ id, url: `${req.protocol}://${req.get('host')}/p/${id}` });
       } catch (error) {
         if (error.code !== '23505' || attempt === 2) throw error;
@@ -63,8 +66,9 @@ app.post('/api/pastes', async (req, res, next) => {
 
 // Reading a paste increments its view count, so this response must not be cached.
 app.get('/api/pastes/:id', async (req, res, next) => {
-  const client = await pool.connect();
+  let client;
   try {
+    client = await db.connect();
     await client.query('BEGIN');
     const found = await client.query('SELECT * FROM pastes WHERE id = $1 FOR UPDATE', [req.params.id]);
     const paste = found.rows[0];
@@ -76,15 +80,18 @@ app.get('/api/pastes/:id', async (req, res, next) => {
     }
     const updated = await client.query('UPDATE pastes SET view_count = view_count + 1 WHERE id = $1 RETURNING view_count', [paste.id]);
     await client.query('COMMIT');
+    if (paste.max_views !== null && updated.rows[0].view_count >= paste.max_views) {
+      await cache.deleteByPrefix('gallery:');
+    }
     res.set('Cache-Control', 'no-store');
     return res.json({
       id: paste.id, title: paste.title, content: paste.content, createdAt: paste.created_at,
       expiresAt: paste.expires_at, maxViews: paste.max_views, viewCount: updated.rows[0].view_count
     });
   } catch (error) {
-    await client.query('ROLLBACK').catch(() => {});
+    if (client) await client.query('ROLLBACK').catch(() => {});
     next(error);
-  } finally { client.release(); }
+  } finally { client?.release(); }
 });
 
 app.get('/api/pastes', async (req, res, next) => {
@@ -93,17 +100,17 @@ app.get('/api/pastes', async (req, res, next) => {
     if (!parsed.success) return res.status(400).json({ error: 'Invalid page or search query.' });
     const { q, page, limit } = parsed.data;
     const key = `gallery:${page}:${limit}:${q.toLowerCase()}`;
-    const cached = await cacheGet(key);
+    const cached = await cache.get(key);
     if (cached) {
       res.set('Cache-Control', 'public, max-age=15, stale-while-revalidate=30');
       return res.json(cached);
     }
-    const values = q ? [`%${q}%`, limit, (page - 1) * limit] : [limit, (page - 1) * limit];
-    const predicate = q ? 'AND (title ILIKE $1 OR content ILIKE $1)' : '';
+    const values = q ? [`${q.toLowerCase()}%`, limit, (page - 1) * limit] : [limit, (page - 1) * limit];
+    const predicate = q ? 'AND lower(title) LIKE $1' : '';
     const offsetParam = q ? '$3' : '$2';
     const limitParam = q ? '$2' : '$1';
     // Single page query, no per-row lookups; private pastes are excluded from discovery.
-    const result = await pool.query(
+    const result = await db.query(
       `SELECT id, title, LEFT(content, 240) AS preview, created_at
        FROM pastes WHERE discoverable = TRUE AND (expires_at IS NULL OR expires_at > NOW())
        AND (max_views IS NULL OR view_count < max_views) ${predicate}
@@ -111,7 +118,7 @@ app.get('/api/pastes', async (req, res, next) => {
       values
     );
     const payload = { items: result.rows, page, limit, hasMore: result.rowCount === limit };
-    await cacheSet(key, payload, 20);
+    await cache.set(key, payload, 20);
     res.set('Cache-Control', 'public, max-age=15, stale-while-revalidate=30');
     return res.json(payload);
   } catch (error) { next(error); }
@@ -123,9 +130,14 @@ app.get('/p/:id', (_req, res) => res.sendFile(path.join(dist, 'index.html')));
 app.get('*', (_req, res) => res.sendFile(path.join(dist, 'index.html')));
 
 app.use((error, _req, res, _next) => {
-  console.error(error);
   if (error.type === 'entity.too.large') return res.status(413).json({ error: 'Request body is too large.' });
+  if (error.type === 'entity.parse.failed') return res.status(400).json({ error: 'Malformed JSON request body.' });
+  console.error(error);
   return res.status(500).json({ error: 'Something went wrong. Please try again.' });
 });
 
+return app;
+}
+
+const app = createApp();
 export default app;

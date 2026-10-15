@@ -10,11 +10,23 @@ if (!process.env.DATABASE_URL) {
   throw new Error('DATABASE_URL is required. Copy .env.example to .env and configure PostgreSQL.');
 }
 
+const configuredPoolMax = Number(process.env.DB_POOL_MAX ?? 5);
+if (!Number.isInteger(configuredPoolMax) || configuredPoolMax < 1 || configuredPoolMax > 20) {
+  throw new Error('DB_POOL_MAX must be an integer between 1 and 20.');
+}
+
 export const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  max: Number(process.env.DB_POOL_MAX ?? 10),
-  idleTimeoutMillis: 30_000,
-  connectionTimeoutMillis: 5_000,
+  // Five connections per process leaves room under typical free-tier limits;
+  // size this against the provider's total budget before increasing instances.
+  max: configuredPoolMax,
+  idleTimeoutMillis: 10_000,
+  connectionTimeoutMillis: 3_000,
+  maxLifetimeSeconds: 1_800,
+  statement_timeout: 10_000,
+  lock_timeout: 3_000,
+  idle_in_transaction_session_timeout: 10_000,
+  application_name: 'pastebox-api',
   ssl: process.env.DATABASE_SSL === 'true' ? { rejectUnauthorized: false } : undefined
 });
 

@@ -11,5 +11,7 @@ CREATE TABLE IF NOT EXISTS pastes (
 
 CREATE INDEX IF NOT EXISTS pastes_discoverable_created_idx
   ON pastes (created_at DESC, id DESC) WHERE discoverable = TRUE;
+CREATE INDEX IF NOT EXISTS pastes_discoverable_title_prefix_idx
+  ON pastes (lower(title) text_pattern_ops) WHERE discoverable = TRUE;
 CREATE INDEX IF NOT EXISTS pastes_expires_at_idx
   ON pastes (expires_at) WHERE expires_at IS NOT NULL;

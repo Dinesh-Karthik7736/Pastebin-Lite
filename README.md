@@ -24,7 +24,7 @@ A small Pastebin-style application for saving text and sharing it with a link. P
 │       ├── styles.css             # Responsive UI and skeleton animation
 │       ├── components/            # Shared header and loading skeleton
 │       ├── lib/api.js             # Typed-by-convention API helpers
-│       └── pages/                 # Create, shared paste, and Explore pages
+│       └── pages/                 # Pages and React user-flow tests
 ├── server/
 │   ├── src/
 │   │   ├── index.js               # Startup, schema initialization, graceful shutdown
@@ -32,6 +32,7 @@ A small Pastebin-style application for saving text and sharing it with a link. P
 │   │   ├── db.js                  # PostgreSQL pool and schema loader
 │   │   ├── schema.sql             # Tables and indexes
 │   │   └── cache.js               # Optional Redis plus bounded memory cache
+│   ├── test/app.test.js           # API and PostgreSQL integration tests
 │   └── package.json
 ├── docker-compose.yml             # Local PostgreSQL and Redis
 ├── .env.example
@@ -47,6 +48,8 @@ Requirements: Node.js 20+, npm, and Docker Desktop (or your own PostgreSQL insta
 3. Install packages with `npm install`.
 4. Start the API and Vite development server with `npm run dev`.
 5. Open the Vite URL printed in the terminal (usually `http://localhost:5173`).
+
+Run API integration tests and React user-flow tests with `npm test`. The API suite uses PGlite, an in-process PostgreSQL engine, so Docker or a hosted database is not needed to run the suite.
 
 The first API start creates the table and indexes using idempotent SQL in `server/src/schema.sql`. Redis is optional. To use it locally, set `REDIS_URL=redis://localhost:6379` in `.env`. PostgreSQL can also be provided by a hosted service via `DATABASE_URL`; set `DATABASE_SSL=true` if its connection requires TLS.
 
@@ -76,8 +79,8 @@ Create request example:
 ## Implementation notes
 
 - **View limits are concurrency-safe:** paste reads run in a PostgreSQL transaction, lock the row, check expiry and the limit, then increment the count before returning the content. Thus concurrent requests cannot overrun the configured view count. The view endpoint sends `Cache-Control: no-store` because serving it from a cache would bypass the view counter.
-- **PostgreSQL access:** all values are parameterized. A bounded `pg.Pool` is created once per Node process; `DB_POOL_MAX` can tune its per-instance maximum. The deployment's total connection budget should account for the number of app instances.
-- **Indexes:** a partial ordered index supports the Explore feed, and a partial expiry index supports expiry-related scans. The primary key indexes paste lookup.
+- **PostgreSQL access:** all values are parameterized. A bounded `pg.Pool` is created once per Node process; the conservative default is five connections per instance, with `DB_POOL_MAX` tunable from 1 to 20. The pool also uses short connection/idle timeouts, a 30-minute connection lifetime, and a 10-second statement timeout. The deployment's total connection budget should account for the number of app instances.
+- **Indexes:** a partial ordered index supports the Explore feed, a partial `lower(title)` pattern index supports prefix search, and a partial expiry index supports expiry-related scans. The primary key indexes paste lookup. Prefix search is intentionally used so search does not scan paste bodies or require a database extension.
 - **No N+1 path:** Explore retrieves a page and the preview fields in one SQL query. Paste reads retrieve a single row; there are no follow-up per-row database calls.
 - **Caching:** TanStack Query caches list responses in each browser. The Express list endpoint has short browser/CDN cache headers and an application cache. If `REDIS_URL` is configured, app instances share cached list results; otherwise each process has a size-bounded, TTL-based in-memory cache. New pastes invalidate Explore cache keys. Paste content reads are deliberately uncached.
 - **Pagination:** Explore requests a bounded page (`limit` is capped at 50), with a stable `created_at, id` order. The UI provides next/previous controls.
@@ -122,7 +125,7 @@ For production, use a managed/shared Redis service when running multiple instanc
 | --- | --- | --- |
 | `DATABASE_URL` | PostgreSQL connection string | Required |
 | `DATABASE_SSL` | Enable TLS for PostgreSQL | `false` |
-| `DB_POOL_MAX` | Maximum database connections per app process | `10` |
+| `DB_POOL_MAX` | Maximum database connections per app process (1–20) | `5` |
 | `REDIS_URL` | Optional shared Redis cache | Empty (memory fallback) |
 | `PORT` | HTTP port | `3000` |
 

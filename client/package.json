@@ -3,13 +3,24 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "scripts": { "dev": "vite --host 0.0.0.0", "build": "vite build" },
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "vite build",
+    "test": "vitest run"
+  },
   "dependencies": {
     "@tanstack/react-query": "^5.62.11",
     "lucide-react": "^0.468.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "react-router-dom": "^6.28.1"
+    "react-router-dom": "^7.18.4"
   },
-  "devDependencies": { "@vitejs/plugin-react": "^4.3.4", "vite": "^6.0.5" }
+  "devDependencies": {
+    "@testing-library/react": "^16.3.3",
+    "@testing-library/user-event": "^14.6.8",
+    "@vitejs/plugin-react": "^4.3.4",
+    "jsdom": "^26.1.0",
+    "vite": "^6.0.5",
+    "vitest": "^4.1.11"
+  }
 }
