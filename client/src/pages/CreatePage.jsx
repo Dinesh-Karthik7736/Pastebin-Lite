@@ -12,9 +12,10 @@ export default function CreatePage() {
   const [discoverable, setDiscoverable] = useState(false);
   const [copied, setCopied] = useState(false);
   const mutation = useMutation({ mutationFn: createPaste });
+  const shareUrl = mutation.data ? new URL(mutation.data.url, window.location.origin).href : '';
 
   async function copyLink() {
-    await navigator.clipboard.writeText(mutation.data.url);
+    await navigator.clipboard.writeText(shareUrl);
     setCopied(true);
     window.setTimeout(() => setCopied(false), 1800);
   }
@@ -27,7 +28,7 @@ export default function CreatePage() {
     <section className="editor-card">
       {mutation.isSuccess ? <div className="success-panel">
         <div className="success-icon"><Check size={20} /></div><div className="eyebrow">Your paste is ready</div><h2>Good things are<br />meant to be shared.</h2><p>Anyone with this link can open your note.</p>
-        <div className="share-link"><span>{mutation.data.url}</span><button onClick={copyLink} aria-label="Copy share link">{copied ? <Check size={16} /> : <Copy size={16} />}{copied ? 'Copied' : 'Copy'}</button></div>
+        <div className="share-link"><span>{shareUrl}</span><button onClick={copyLink} aria-label="Copy share link">{copied ? <Check size={16} /> : <Copy size={16} />}{copied ? 'Copied' : 'Copy'}</button></div>
         <button className="text-button" onClick={reset}><Plus size={15} /> Create another</button>
       </div> : <form onSubmit={(event) => { event.preventDefault(); mutation.mutate({ title, content, expiresIn, maxViews, discoverable }); }}>
         <div className="editor-heading"><div><span className="step">01</span><div><h2>A new paste</h2><p>Write or drop in your text below.</p></div></div><span className="privacy-label"><LockKeyhole size={12} /> Private by default</span></div>

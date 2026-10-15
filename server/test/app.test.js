@@ -28,10 +28,10 @@ function createTestCache() {
   };
 }
 
-async function request(pathname, { method = 'GET', body } = {}) {
+async function request(pathname, { method = 'GET', body, headers = {} } = {}) {
   const response = await fetch(`${baseUrl}${pathname}`, {
     method,
-    headers: body === undefined ? {} : { 'Content-Type': 'application/json' },
+    headers: { ...(body === undefined ? {} : { 'Content-Type': 'application/json' }), ...headers },
     body: body === undefined ? undefined : JSON.stringify(body)
   });
   const payload = await response.json();
@@ -101,6 +101,7 @@ test('creates private pastes by default and retrieves their full content without
   assert.equal(created.response.status, 201);
   assert.match(created.payload.id, /^[A-Za-z0-9_-]+$/);
   assert.match(created.payload.url, new RegExp(`/p/${created.payload.id}$`));
+  assert.equal(created.payload.url, `/p/${created.payload.id}`);
 
   const stored = await database.query('SELECT title, discoverable, max_views FROM pastes WHERE id = $1', [created.payload.id]);
   assert.deepEqual(stored.rows[0], { title: 'A title', discoverable: false, max_views: null });
@@ -110,6 +111,27 @@ test('creates private pastes by default and retrieves their full content without
   assert.equal(retrieved.response.headers.get('cache-control'), 'no-store');
   assert.equal(retrieved.payload.content, 'line one\nline two');
   assert.equal(retrieved.payload.viewCount, 1);
+});
+
+test('limits paste creation requests from one client', async () => {
+  for (let index = 0; index < 20; index += 1) {
+    assert.equal((await createPaste()).response.status, 201);
+  }
+  const limited = await createPaste();
+  assert.equal(limited.response.status, 429);
+  assert.equal(limited.response.headers.get('retry-after') !== null, true);
+  assert.deepEqual(limited.payload, { error: 'Too many requests. Please try again later.' });
+});
+
+test('does not reflect untrusted origins or request hosts into share links', async () => {
+  const { response, payload } = await request('/api/pastes', {
+    method: 'POST',
+    body: { content: 'safe link' },
+    headers: { Origin: 'https://attacker.example', Host: 'attacker.example' }
+  });
+  assert.equal(response.status, 201);
+  assert.equal(response.headers.get('access-control-allow-origin'), null);
+  assert.equal(payload.url, `/p/${payload.id}`);
 });
 
 test('a view limit allows the final view, then returns not found and clears Explore cache', async () => {

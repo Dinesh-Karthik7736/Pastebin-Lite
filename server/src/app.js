@@ -25,22 +25,49 @@ const listSchema = z.object({
 const expirationMs = { never: null, '1h': 3_600_000, '1d': 86_400_000, '7d': 604_800_000, '30d': 2_592_000_000 };
 const defaultCache = { get: cacheGet, set: cacheSet, deleteByPrefix: cacheDeleteByPrefix };
 
+function createIpRateLimiter({ limit, windowMs }) {
+  const clients = new Map();
+  return (req, res, next) => {
+    const now = Date.now();
+    const key = req.ip || req.socket.remoteAddress || 'unknown';
+    let entry = clients.get(key);
+    if (!entry || entry.resetAt <= now) {
+      entry = { count: 0, resetAt: now + windowMs };
+      clients.set(key, entry);
+    }
+    if (clients.size > 10_000) {
+      for (const [client, value] of clients) if (value.resetAt <= now) clients.delete(client);
+      while (clients.size > 10_000) clients.delete(clients.keys().next().value);
+    }
+    if (entry.count >= limit) {
+      res.set('Retry-After', String(Math.max(1, Math.ceil((entry.resetAt - now) / 1000))));
+      res.set('Cache-Control', 'no-store');
+      return res.status(429).json({ error: 'Too many requests. Please try again later.' });
+    }
+    entry.count += 1;
+    res.set('RateLimit-Limit', String(limit));
+    res.set('RateLimit-Remaining', String(limit - entry.count));
+    return next();
+  };
+}
+
 export function createApp({ db = pool, cache = defaultCache } = {}) {
 const app = express();
 
 app.disable('x-powered-by');
 app.set('trust proxy', 1);
 app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
-app.use(cors({ origin: process.env.CLIENT_ORIGIN || true }));
+app.use(cors({ origin: process.env.CLIENT_ORIGIN || false }));
 app.use(compression());
 app.use(express.json({ limit: '520kb' }));
+const createPasteRateLimit = createIpRateLimiter({ limit: 20, windowMs: 15 * 60 * 1000 });
 
 app.get('/api/health', async (_req, res) => {
   try { await db.query('SELECT 1'); res.json({ status: 'ok' }); }
   catch { res.status(503).json({ status: 'unavailable' }); }
 });
 
-app.post('/api/pastes', async (req, res, next) => {
+app.post('/api/pastes', createPasteRateLimit, async (req, res, next) => {
   try {
     const parsed = createSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message ?? 'Invalid paste.' });
@@ -55,7 +82,7 @@ app.post('/api/pastes', async (req, res, next) => {
           [id, title, content, expiresAt, views, discoverable]
         );
         await cache.deleteByPrefix('gallery:');
-        return res.status(201).json({ id, url: `${req.protocol}://${req.get('host')}/p/${id}` });
+        return res.status(201).json({ id, url: `/p/${id}` });
       } catch (error) {
         if (error.code !== '23505' || attempt === 2) throw error;
       }

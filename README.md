@@ -84,6 +84,7 @@ Create request example:
 - **No N+1 path:** Explore retrieves a page and the preview fields in one SQL query. Paste reads retrieve a single row; there are no follow-up per-row database calls.
 - **Caching:** TanStack Query caches list responses in each browser. The Express list endpoint has short browser/CDN cache headers and an application cache. If `REDIS_URL` is configured, app instances share cached list results; otherwise each process has a size-bounded, TTL-based in-memory cache. New pastes invalidate Explore cache keys. Paste content reads are deliberately uncached.
 - **Pagination:** Explore requests a bounded page (`limit` is capped at 50), with a stable `created_at, id` order. The UI provides next/previous controls.
+- **Abuse controls:** Paste creation is limited to 20 requests per client IP every 15 minutes. CORS is disabled by default and can be enabled for one trusted frontend origin with `CLIENT_ORIGIN`. Generated links are relative paths, so an untrusted `Host` header cannot be copied into a share link. The limiter is in-process; use a shared rate-limit store or edge rules before scaling across multiple app instances.
 - **Debouncing and loading states:** search waits 300 ms after typing before fetching. Route-level skeletons and list skeletons keep layout stable during loading.
 - **Code delivery:** React pages load through dynamic imports; Vite separates React and query dependencies into chunks and minifies JavaScript and CSS for production. Compression middleware compresses API and server-served responses.
 - **Load balancing:** the Express service is stateless and can run as multiple instances behind a platform's HTTP load balancer. Use shared PostgreSQL and Redis for multi-instance deployments; the in-memory cache fallback is local to one instance.
@@ -93,7 +94,7 @@ Create request example:
 
 ## Deployment
 
-The server serves the production Vite build and the API from one origin. A straightforward free-tier layout is a Node web service (for example Render) plus PostgreSQL (for example Neon). Configure the service to run `npm install`, build with `npm run build`, and start with `npm start`. Set `DATABASE_URL`, `DATABASE_SSL=true` when needed, and optionally `REDIS_URL`. The `/api/health` endpoint is suitable as the service health check. A provider such as Vercel can also host the React client and Express API as functions, but requires adapting the Express entrypoint to its function routing model; the included server is intended to run as a Node web service.
+The server serves the production Vite build and the API from one origin. A straightforward free-tier layout is a Node web service (for example Render) plus hosted PostgreSQL (for example Neon). A database URL that points to `localhost` only works on the computer running PostgreSQL and cannot be used by a public host. Configure the service to run `npm install`, build with `npm run build`, and start with `npm start`. Set `DATABASE_URL` to the hosted database's connection URL, set `DATABASE_SSL` according to that provider's connection instructions, and optionally set `REDIS_URL`. The `/api/health` endpoint is suitable as the service health check. A provider such as Vercel can also host the React client and Express API as functions, but requires adapting the Express entrypoint to its function routing model; the included server is intended to run as a Node web service.
 
 For production, use a managed/shared Redis service when running multiple instances, configure TLS and secret environment variables in the hosting dashboard, and check the database provider's connection limit before scaling the web service.
 
@@ -128,4 +129,5 @@ For production, use a managed/shared Redis service when running multiple instanc
 | `DB_POOL_MAX` | Maximum database connections per app process (1–20) | `5` |
 | `REDIS_URL` | Optional shared Redis cache | Empty (memory fallback) |
 | `PORT` | HTTP port | `3000` |
+| `CLIENT_ORIGIN` | Optional allowed frontend origin for cross-origin API calls | Disabled |
 
