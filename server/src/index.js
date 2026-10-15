@@ -1,9 +1,10 @@
 import 'dotenv/config';
 import app from './app.js';
 import { initializeDatabase, pool } from './db.js';
+import { initializeWithRetry } from './startup.js';
 
 const port = Number(process.env.PORT ?? 3000);
-await initializeDatabase();
+await initializeWithRetry(initializeDatabase);
 const server = app.listen(port, () => console.log(`Pastebox API listening on ${port}`));
 
 async function shutdown() {
