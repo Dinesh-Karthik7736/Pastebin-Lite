@@ -24,6 +24,20 @@ const listSchema = z.object({
 });
 const expirationMs = { never: null, '1h': 3_600_000, '1d': 86_400_000, '7d': 604_800_000, '30d': 2_592_000_000 };
 const defaultCache = { get: cacheGet, set: cacheSet, deleteByPrefix: cacheDeleteByPrefix };
+const shareIdAlphabet = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
+
+function createShareId() {
+  let id = '';
+  while (id.length < 8) {
+    for (const byte of randomBytes(16)) {
+      // Rejection sampling keeps each letter equally likely without adding digits.
+      if (byte >= 208) continue;
+      id += shareIdAlphabet[byte % shareIdAlphabet.length];
+      if (id.length === 8) break;
+    }
+  }
+  return id;
+}
 
 function createIpRateLimiter({ limit, windowMs }) {
   const clients = new Map();
@@ -61,6 +75,7 @@ app.use(cors({ origin: process.env.CLIENT_ORIGIN || false }));
 app.use(compression());
 app.use(express.json({ limit: '520kb' }));
 const createPasteRateLimit = createIpRateLimiter({ limit: 20, windowMs: 15 * 60 * 1000 });
+const readPasteRateLimit = createIpRateLimiter({ limit: 120, windowMs: 60 * 1000 });
 
 app.get('/api/health', async (_req, res) => {
   try { await db.query('SELECT 1'); res.json({ status: 'ok' }); }
@@ -75,7 +90,7 @@ app.post('/api/pastes', createPasteRateLimit, async (req, res, next) => {
     const expiresAt = expirationMs[expiresIn] ? new Date(Date.now() + expirationMs[expiresIn]) : null;
     const views = maxViews === 'unlimited' ? null : maxViews;
     for (let attempt = 0; attempt < 3; attempt += 1) {
-      const id = randomBytes(7).toString('base64url');
+      const id = createShareId();
       try {
         await db.query(
           'INSERT INTO pastes (id, title, content, expires_at, max_views, discoverable) VALUES ($1, $2, $3, $4, $5, $6)',
@@ -92,7 +107,7 @@ app.post('/api/pastes', createPasteRateLimit, async (req, res, next) => {
 });
 
 // Reading a paste increments its view count, so this response must not be cached.
-app.get('/api/pastes/:id', async (req, res, next) => {
+app.get('/api/pastes/:id', readPasteRateLimit, async (req, res, next) => {
   let client;
   try {
     client = await db.connect();
@@ -105,15 +120,21 @@ app.get('/api/pastes/:id', async (req, res, next) => {
       res.set('Cache-Control', 'no-store');
       return res.status(404).json({ error: 'Paste not found or expired.' });
     }
-    const updated = await client.query('UPDATE pastes SET view_count = view_count + 1 WHERE id = $1 RETURNING view_count', [paste.id]);
+    const viewCount = paste.view_count + 1;
+    const reachedViewLimit = paste.max_views !== null && viewCount >= paste.max_views;
+    if (reachedViewLimit) {
+      await client.query('DELETE FROM pastes WHERE id = $1', [paste.id]);
+    } else {
+      await client.query('UPDATE pastes SET view_count = $2 WHERE id = $1', [paste.id, viewCount]);
+    }
     await client.query('COMMIT');
-    if (paste.max_views !== null && updated.rows[0].view_count >= paste.max_views) {
+    if (reachedViewLimit && paste.discoverable) {
       await cache.deleteByPrefix('gallery:');
     }
     res.set('Cache-Control', 'no-store');
     return res.json({
       id: paste.id, title: paste.title, content: paste.content, createdAt: paste.created_at,
-      expiresAt: paste.expires_at, maxViews: paste.max_views, viewCount: updated.rows[0].view_count
+      expiresAt: paste.expires_at, maxViews: paste.max_views, viewCount
     });
   } catch (error) {
     if (client) await client.query('ROLLBACK').catch(() => {});

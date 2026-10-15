@@ -99,7 +99,7 @@ test('validates required content, limits, and maximum content size', async () =>
 test('creates private pastes by default and retrieves their full content without caching', async () => {
   const created = await createPaste({ title: '  A title  ', content: 'line one\nline two' });
   assert.equal(created.response.status, 201);
-  assert.match(created.payload.id, /^[A-Za-z0-9_-]+$/);
+  assert.match(created.payload.id, /^[A-Za-z]{8}$/);
   assert.match(created.payload.url, new RegExp(`/p/${created.payload.id}$`));
   assert.equal(created.payload.url, `/p/${created.payload.id}`);
 
@@ -123,6 +123,14 @@ test('limits paste creation requests from one client', async () => {
   assert.deepEqual(limited.payload, { error: 'Too many requests. Please try again later.' });
 });
 
+test('limits share-link guesses from one client', async () => {
+  for (let index = 0; index < 120; index += 1) {
+    assert.equal((await request('/api/pastes/NotAReal')).response.status, 404);
+  }
+  const limited = await request('/api/pastes/NotAReal');
+  assert.equal(limited.response.status, 429);
+});
+
 test('does not reflect untrusted origins or request hosts into share links', async () => {
   const { response, payload } = await request('/api/pastes', {
     method: 'POST',
@@ -143,9 +151,26 @@ test('a view limit allows the final view, then returns not found and clears Expl
   assert.equal(finalView.response.status, 200);
   assert.equal(finalView.payload.viewCount, 1);
   assert.equal(cache.entries.size, 0);
+  const deleted = await database.query('SELECT id FROM pastes WHERE id = $1', [created.payload.id]);
+  assert.equal(deleted.rowCount, 0);
 
   const laterView = await request(`/api/pastes/${created.payload.id}`);
   assert.equal(laterView.response.status, 404);
+});
+
+test('keeps a limited paste until its final allowed view, then deletes it', async () => {
+  const created = await createPaste({ maxViews: 2 });
+
+  const firstView = await request(`/api/pastes/${created.payload.id}`);
+  assert.equal(firstView.response.status, 200);
+  assert.equal(firstView.payload.viewCount, 1);
+  assert.equal((await database.query('SELECT id FROM pastes WHERE id = $1', [created.payload.id])).rowCount, 1);
+
+  const finalView = await request(`/api/pastes/${created.payload.id}`);
+  assert.equal(finalView.response.status, 200);
+  assert.equal(finalView.payload.viewCount, 2);
+  assert.equal((await database.query('SELECT id FROM pastes WHERE id = $1', [created.payload.id])).rowCount, 0);
+  assert.equal((await request(`/api/pastes/${created.payload.id}`)).response.status, 404);
 });
 
 test('expired pastes cannot be retrieved', async () => {

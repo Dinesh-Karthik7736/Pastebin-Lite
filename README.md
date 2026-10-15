@@ -1,6 +1,6 @@
 # Pastebox
 
-A small Pastebin-style application for saving text and sharing it with a link. Pastebox is built with React and Express, with PostgreSQL for durable storage. A paste can expire after a chosen time or after a maximum number of views. Pastes are private (unlisted) by default; owners may opt into the public Explore page when creating one.
+A small Pastebin-style application for saving text and sharing it with a link. Pastebox is built with React and Express, with PostgreSQL for durable storage. New share links use a compact, eight-letter ID. A paste can expire after a chosen time or after a maximum number of views; pastes are deleted from PostgreSQL after serving their final permitted view. Pastes are private (unlisted) by default; owners may opt into the public Explore page when creating one.
 
 ## Features
 
