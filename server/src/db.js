@@ -27,7 +27,7 @@ export const pool = new Pool({
   lock_timeout: 3_000,
   idle_in_transaction_session_timeout: 10_000,
   application_name: 'pastebox-api',
-  ssl: process.env.DATABASE_SSL === 'true' ? { rejectUnauthorized: false } : undefined
+  ssl: process.env.DATABASE_SSL === 'true' ? { rejectUnauthorized: true } : undefined
 });
 
 pool.on('error', (error) => console.error('Unexpected idle PostgreSQL client error', error));
