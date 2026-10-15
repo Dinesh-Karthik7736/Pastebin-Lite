@@ -3,6 +3,7 @@ services:
     name: pastebox
     runtime: node
     plan: free
+    region: ohio
     buildCommand: npm install && npm run build
     startCommand: npm start
     healthCheckPath: /api/health
